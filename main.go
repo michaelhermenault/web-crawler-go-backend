@@ -90,9 +90,6 @@ func main() {
 
 }
 
-// fakeFetcher is Fetcher that returns canned results.
-type fakeFetcher map[string]*fakeResult
-
 // realFetcher is real Fetcher that returns real results.
 type realFetcher struct{}
 
@@ -111,7 +108,6 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
-			// fmt.Println(url, " Finished fetch")
 			return "", results, nil
 		case html.StartTagToken, html.EndTagToken:
 			tn, _ := z.TagName()
@@ -134,51 +130,4 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 			}
 		}
 	}
-}
-
-type fakeResult struct {
-	body string
-	urls []string
-}
-
-func (f fakeFetcher) Fetch(url string) (string, []string, error) {
-	if res, ok := f[url]; ok {
-		return res.body, res.urls, nil
-	}
-	return "", nil, fmt.Errorf("not found: %s", url)
-
-}
-
-// fetcher is a populated fakeFetcher.
-var fetcher = fakeFetcher{
-	"https://golang.org/": &fakeResult{
-		"The Go Programming Language",
-		[]string{
-			"https://golang.org/pkg/",
-			"https://golang.org/cmd/",
-		},
-	},
-	"https://golang.org/pkg/": &fakeResult{
-		"Packages",
-		[]string{
-			"https://golang.org/",
-			"https://golang.org/cmd/",
-			"https://golang.org/pkg/fmt/",
-			"https://golang.org/pkg/os/",
-		},
-	},
-	"https://golang.org/pkg/fmt/": &fakeResult{
-		"Package fmt",
-		[]string{
-			"https://golang.org/",
-			"https://golang.org/pkg/",
-		},
-	},
-	"https://golang.org/pkg/os/": &fakeResult{
-		"Package os",
-		[]string{
-			"https://golang.org/",
-			"https://golang.org/pkg/",
-		},
-	},
 }
