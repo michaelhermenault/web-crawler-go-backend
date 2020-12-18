@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"sync"
@@ -13,7 +14,7 @@ import (
 )
 
 const initialResultsSize = 50
-const timeOutInSeconds = 10
+const timeOutInSeconds = 2
 
 // Fetcher returns the body of URL and
 // a slice of URLs found on that page.
@@ -54,7 +55,7 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 	if urlMap.flip(url) {
 		return
 	}
-	body, urls, err := fetcher.Fetch(url)
+	_, urls, err := fetcher.Fetch(url)
 
 	if err != nil {
 		// If we can't find the url, return (future iterations)
@@ -62,7 +63,7 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 		return
 	}
 
-	fmt.Printf("Crawling: %s %q, child length: %d\n", url, body, len(urls))
+	// fmt.Printf("Crawling: %s %q, child length: %d\n", url, body, len(urls))
 
 	doneCh := make(chan bool, len(urls))
 	numToExplore := len(urls)
@@ -83,41 +84,85 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 	return
 }
 
-func doTheShit() {
-	fmt.Println("Hello!")
+func crawlHelper(url string, depth int, client *http.Client, rdb *redis.Client) {
+
+	resultsChannelName := "go-crawler-results" + url
+	doneChannelName := "go-crawler-done" + url
+
+	doneCh := make(chan bool)
+	graphCh := make(chan graphNode)
+
+	defer func() {
+		close(doneCh)
+		close(graphCh)
+	}()
+
+	urlMap := SafeMap{v: make(map[string]bool)}
+	go Crawl(url, depth, realFetcher{client: client, graphCh: graphCh}, doneCh, &urlMap)
+	for {
+		select {
+		case <-doneCh:
+			err := rdb.Publish(ctx, doneChannelName, "done.").Err()
+			if err != nil {
+				panic(err)
+			}
+			fmt.Println("Done recursively crawling: ", url)
+			return
+		case getResult := <-graphCh:
+			err := rdb.Publish(ctx, resultsChannelName, "done.").Err()
+			if err != nil {
+				panic(err)
+			}
+			fmt.Println("Crawling: ", getResult.parent, " child length: ", len(getResult.children), " time: ", getResult.timeFound)
+		}
+	}
 }
 
 var ctx = context.Background()
 
 func main() {
 
+	// Set up the http client
 	tr := &http.Transport{
-		IdleConnTimeout: timeOutInSeconds * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   timeOutInSeconds * time.Second,
+			KeepAlive: timeOutInSeconds * time.Second,
+			DualStack: true,
+		}).DialContext,
+		IdleConnTimeout:     timeOutInSeconds * time.Second,
+		TLSHandshakeTimeout: timeOutInSeconds * time.Second,
 	}
 	client := &http.Client{Transport: tr}
 
+	// Set up the redis client
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password set
 		DB:       0,  // use default DB
 	})
 
-	pubsub := rdb.Subscribe(ctx, "go-crawler-commands")
+	// Receive instructions from this channel
+	commandCh := rdb.Subscribe(ctx, "go-crawler-commands").Channel()
 
-	ch := pubsub.Channel()
-
-	for msg := range ch {
+	// Stay in this loop responding to incoming requests
+	for msg := range commandCh {
 		fmt.Println("Staring recursive crawl on url: ", msg.Payload)
-		var fetcher = realFetcher{client}
-		doneCh := make(chan bool)
-		urlMap := SafeMap{v: make(map[string]bool)}
-		go Crawl(msg.Payload, 3, fetcher, doneCh, &urlMap)
+		go crawlHelper(msg.Payload, 3, client, rdb)
 	}
 
 }
 
+type graphNode struct {
+	parent    string
+	children  []string
+	timeFound time.Time
+}
+
 // realFetcher is real Fetcher that returns real results.
-type realFetcher struct{ client *http.Client }
+type realFetcher struct {
+	client  *http.Client
+	graphCh chan graphNode
+}
 
 func (f realFetcher) Fetch(url string) (string, []string, error) {
 	results := make([]string, 0, initialResultsSize)
@@ -134,6 +179,7 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
+			f.graphCh <- graphNode{parent: url, children: results, timeFound: time.Now()}
 			return "", results, nil
 		case html.StartTagToken, html.EndTagToken:
 			tn, _ := z.TagName()
@@ -156,4 +202,5 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 			}
 		}
 	}
+
 }
