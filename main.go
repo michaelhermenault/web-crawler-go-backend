@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
 	"sync"
+	"time"
 
+	"github.com/go-redis/redis/v8"
 	"golang.org/x/net/html"
 )
 
 const initialResultsSize = 50
+const timeOutInSeconds = 10
 
 // Fetcher returns the body of URL and
 // a slice of URLs found on that page.
@@ -39,7 +43,6 @@ func (safeMap *SafeMap) flip(name string) bool {
 func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap *SafeMap) {
 	// Once we're done we inform our parent
 	defer func() {
-		// fmt.Println(url, "Done")
 		parentChan <- true
 	}()
 
@@ -80,23 +83,46 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 	return
 }
 
-func main() {
-	var actualFetcher = realFetcher{}
+func doTheShit() {
+	fmt.Println("Hello!")
+}
 
-	doneCh := make(chan bool)
-	urlMap := SafeMap{v: make(map[string]bool)}
-	go Crawl("https://xkcd.com/", 3, actualFetcher, doneCh, &urlMap)
-	<-doneCh
+var ctx = context.Background()
+
+func main() {
+
+	tr := &http.Transport{
+		IdleConnTimeout: timeOutInSeconds * time.Second,
+	}
+	client := &http.Client{Transport: tr}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	pubsub := rdb.Subscribe(ctx, "go-crawler-commands")
+
+	ch := pubsub.Channel()
+
+	for msg := range ch {
+		fmt.Println("Staring recursive crawl on url: ", msg.Payload)
+		var fetcher = realFetcher{client}
+		doneCh := make(chan bool)
+		urlMap := SafeMap{v: make(map[string]bool)}
+		go Crawl(msg.Payload, 3, fetcher, doneCh, &urlMap)
+	}
 
 }
 
 // realFetcher is real Fetcher that returns real results.
-type realFetcher struct{}
+type realFetcher struct{ client *http.Client }
 
 func (f realFetcher) Fetch(url string) (string, []string, error) {
 	results := make([]string, 0, initialResultsSize)
 
-	resp, err := http.Get(url)
+	resp, err := f.client.Get(url)
 	if err != nil {
 		fmt.Println(err)
 		return "", nil, err
