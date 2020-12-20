@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 
 const initialResultsSize = 50
 const timeOutInSeconds = 2
+const crawlResultsTTL = 10
 
 // Fetcher returns the body of URL and
 // a slice of URLs found on that page.
@@ -37,6 +40,24 @@ func (safeMap *SafeMap) flip(name string) bool {
 	// Whatever the value was, turn it to true
 	safeMap.v[name] = true
 	return result
+}
+
+type jsonTime time.Time
+
+func (t jsonTime) MarshalJSON() ([]byte, error) {
+	//do your serializing here
+	stamp := fmt.Sprintf("\"%s\"", time.Time(t).Format("Mon Jan _2"))
+	return []byte(stamp), nil
+}
+
+type graphNode struct {
+	Parent    string
+	Children  []string
+	TimeFound jsonTime
+}
+
+type finishSentinel struct {
+	DoneMessage string
 }
 
 // Crawl uses fetcher to recursively crawl
@@ -84,10 +105,9 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 	return
 }
 
-func crawlHelper(url string, depth int, client *http.Client, rdb *redis.Client) {
+func crawlHelper(url, uniqueID string, depth int, client *http.Client, rdb *redis.Client) {
 
-	resultsChannelName := "go-crawler-results" + url
-	doneChannelName := "go-crawler-done" + url
+	resultsListName := "go-crawler-results-" + uniqueID
 
 	doneCh := make(chan bool)
 	graphCh := make(chan graphNode)
@@ -99,21 +119,20 @@ func crawlHelper(url string, depth int, client *http.Client, rdb *redis.Client) 
 
 	urlMap := SafeMap{v: make(map[string]bool)}
 	go Crawl(url, depth, realFetcher{client: client, graphCh: graphCh}, doneCh, &urlMap)
+	// Loop until crawling is done, publishing results to redis
 	for {
 		select {
 		case <-doneCh:
-			err := rdb.Publish(ctx, doneChannelName, "done.").Err()
-			if err != nil {
-				panic(err)
-			}
+			marshalled, _ := json.Marshal(finishSentinel{DoneMessage: "true"})
+			rdb.LPush(ctx, resultsListName, marshalled) //.Publish(ctx, resultsChannelName, marshalled).Err()
+			rdb.Expire(ctx, resultsListName, crawlResultsTTL*time.Second)
 			fmt.Println("Done recursively crawling: ", url)
 			return
-		case getResult := <-graphCh:
-			err := rdb.Publish(ctx, resultsChannelName, "done.").Err()
-			if err != nil {
-				panic(err)
-			}
-			fmt.Println("Crawling: ", getResult.parent, " child length: ", len(getResult.children), " time: ", getResult.timeFound)
+		case newNode := <-graphCh:
+			marshalled, _ := json.Marshal(&newNode)
+			rdb.LPush(ctx, resultsListName, marshalled) //.Publish(ctx, resultsChannelName, marshalled).Err()
+			fmt.Println(string(marshalled))
+
 		}
 	}
 }
@@ -146,16 +165,12 @@ func main() {
 
 	// Stay in this loop responding to incoming requests
 	for msg := range commandCh {
-		fmt.Println("Staring recursive crawl on url: ", msg.Payload)
-		go crawlHelper(msg.Payload, 3, client, rdb)
+		splitCommand := strings.Split(msg.Payload, ",")
+		fmt.Println("Staring recursive crawl on url: ", splitCommand[0])
+		fmt.Println("Unique ID: ", splitCommand[1])
+		go crawlHelper(splitCommand[0], splitCommand[1], 3, client, rdb)
 	}
 
-}
-
-type graphNode struct {
-	parent    string
-	children  []string
-	timeFound time.Time
 }
 
 // realFetcher is real Fetcher that returns real results.
@@ -179,7 +194,7 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
-			f.graphCh <- graphNode{parent: url, children: results, timeFound: time.Now()}
+			f.graphCh <- graphNode{Parent: url, Children: results, TimeFound: jsonTime(time.Now())}
 			return "", results, nil
 		case html.StartTagToken, html.EndTagToken:
 			tn, _ := z.TagName()
