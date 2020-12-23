@@ -17,7 +17,7 @@ import (
 
 const initialResultsSize = 50
 const timeOutInSeconds = 2
-const crawlResultsTTL = 10
+const crawlResultsTTL = 60
 
 // Fetcher returns the body of URL and
 // a slice of URLs found on that page.
