@@ -33,11 +33,10 @@ type (
 		sync.Mutex
 		v map[string]bool
 	}
-	jsonTime  time.Duration
 	graphNode struct {
 		Parent    string
 		Children  []string
-		TimeFound jsonTime
+		TimeFound time.Duration
 	}
 	finishSentinel struct {
 		DoneMessage string
@@ -63,10 +62,6 @@ func (safeMap *SafeMap) flip(name string) bool {
 	// Whatever the value was, turn it to true
 	safeMap.v[name] = true
 	return result
-}
-
-func (t jsonTime) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%v", t)), nil
 }
 
 // Crawl uses fetcher to recursively crawl
@@ -199,7 +194,7 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
-			f.graphCh <- graphNode{Parent: url, Children: results, TimeFound: jsonTime(time.Since(f.startTime))}
+			f.graphCh <- graphNode{Parent: url, Children: results, TimeFound: time.Since(f.startTime)}
 			return "", results, nil
 		case html.StartTagToken, html.EndTagToken:
 			tn, _ := z.TagName()
