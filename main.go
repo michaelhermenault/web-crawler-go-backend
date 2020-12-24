@@ -115,7 +115,7 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 
 func crawlHelper(args helperOptions) {
 
-	resultsListName := "go-crawler-results-" + args.uniqueID
+	resultsListName := fmt.Sprintf("go-crawler-results-%s", args.uniqueID)
 
 	doneCh := make(chan bool)
 	graphCh := make(chan graphNode)
