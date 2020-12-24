@@ -112,6 +112,8 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 func crawlHelper(args helperOptions) {
 
 	resultsListName := fmt.Sprintf("go-crawler-results-%s", args.uniqueID)
+	// In case thread crashes, set ttl beforehand (no memory leaks)
+	args.rdb.Expire(ctx, resultsListName, crawlResultsTTL*time.Second)
 
 	doneCh := make(chan bool)
 	graphCh := make(chan graphNode)
@@ -136,8 +138,7 @@ func crawlHelper(args helperOptions) {
 		case newNode := <-graphCh:
 			marshalled, _ := json.Marshal(&newNode)
 			args.rdb.LPush(ctx, resultsListName, marshalled)
-			// In case thread crashes, set ttl after every request (no memory leaks)
-			args.rdb.Expire(ctx, resultsListName, crawlResultsTTL*time.Second)
+
 			fmt.Println(string(marshalled))
 
 		}
