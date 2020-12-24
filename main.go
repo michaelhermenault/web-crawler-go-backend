@@ -33,7 +33,7 @@ type (
 		sync.Mutex
 		v map[string]bool
 	}
-	jsonTime  time.Time
+	jsonTime  time.Duration
 	graphNode struct {
 		Parent    string
 		Children  []string
@@ -43,8 +43,9 @@ type (
 		DoneMessage string
 	}
 	realFetcher struct {
-		client  *http.Client
-		graphCh chan graphNode
+		client    *http.Client
+		graphCh   chan graphNode
+		startTime time.Time
 	}
 	helperOptions struct {
 		url, uniqueID string
@@ -65,7 +66,7 @@ func (safeMap *SafeMap) flip(name string) bool {
 }
 
 func (t jsonTime) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%d", time.Time(t).UnixNano())), nil
+	return []byte(fmt.Sprintf("%v", t)), nil
 }
 
 // Crawl uses fetcher to recursively crawl
@@ -126,7 +127,7 @@ func crawlHelper(args helperOptions) {
 	}()
 
 	urlMap := SafeMap{v: make(map[string]bool)}
-	go Crawl(args.url, args.depth, realFetcher{client: args.client, graphCh: graphCh}, doneCh, &urlMap)
+	go Crawl(args.url, args.depth, realFetcher{client: args.client, graphCh: graphCh, startTime: time.Now()}, doneCh, &urlMap)
 	// Loop until crawling is done, publishing results to redis
 	for {
 		select {
@@ -198,7 +199,7 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
-			f.graphCh <- graphNode{Parent: url, Children: results, TimeFound: jsonTime(time.Now())}
+			f.graphCh <- graphNode{Parent: url, Children: results, TimeFound: jsonTime(time.Since(f.startTime))}
 			return "", results, nil
 		case html.StartTagToken, html.EndTagToken:
 			tn, _ := z.TagName()
