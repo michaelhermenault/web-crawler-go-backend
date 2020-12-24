@@ -15,22 +15,44 @@ import (
 	"golang.org/x/net/html"
 )
 
-const initialResultsSize = 50
-const timeOutInSeconds = 2
-const crawlResultsTTL = 60
+const (
+	initialResultsSize = 50
+	timeOutInSeconds   = 2
+	crawlResultsTTL    = 60
+)
 
-// Fetcher returns the body of URL and
-// a slice of URLs found on that page.
-type Fetcher interface {
-	Fetch(url string) (body string, urls []string, err error)
-}
-
-// SafeMap is a "thread-safe" string->bool Map
-// We'll use it to remember which sites we've already visited
-type SafeMap struct {
-	sync.Mutex
-	v map[string]bool
-}
+type (
+	// Fetcher returns the body of URL and
+	// a slice of URLs found on that page.
+	Fetcher interface {
+		Fetch(url string) (body string, urls []string, err error)
+	}
+	// SafeMap is a "thread-safe" string->bool Map
+	// We'll use it to remember which sites we've already visited
+	SafeMap struct {
+		sync.Mutex
+		v map[string]bool
+	}
+	jsonTime  time.Time
+	graphNode struct {
+		Parent    string
+		Children  []string
+		TimeFound jsonTime
+	}
+	finishSentinel struct {
+		DoneMessage string
+	}
+	realFetcher struct {
+		client  *http.Client
+		graphCh chan graphNode
+	}
+	helperOptions struct {
+		url, uniqueID string
+		depth         int
+		client        *http.Client
+		rdb           *redis.Client
+	}
+)
 
 func (safeMap *SafeMap) flip(name string) bool {
 	safeMap.Lock()
@@ -42,22 +64,8 @@ func (safeMap *SafeMap) flip(name string) bool {
 	return result
 }
 
-type jsonTime time.Time
-
 func (t jsonTime) MarshalJSON() ([]byte, error) {
-	//do your serializing here
-	stamp := fmt.Sprintf("\"%s\"", time.Time(t).Format("Mon Jan _2"))
-	return []byte(stamp), nil
-}
-
-type graphNode struct {
-	Parent    string
-	Children  []string
-	TimeFound jsonTime
-}
-
-type finishSentinel struct {
-	DoneMessage string
+	return []byte(fmt.Sprintf("%d", time.Time(t).UnixNano())), nil
 }
 
 // Crawl uses fetcher to recursively crawl
@@ -105,9 +113,9 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 	return
 }
 
-func crawlHelper(url, uniqueID string, depth int, client *http.Client, rdb *redis.Client) {
+func crawlHelper(args helperOptions) {
 
-	resultsListName := "go-crawler-results-" + uniqueID
+	resultsListName := "go-crawler-results-" + args.uniqueID
 
 	doneCh := make(chan bool)
 	graphCh := make(chan graphNode)
@@ -118,19 +126,19 @@ func crawlHelper(url, uniqueID string, depth int, client *http.Client, rdb *redi
 	}()
 
 	urlMap := SafeMap{v: make(map[string]bool)}
-	go Crawl(url, depth, realFetcher{client: client, graphCh: graphCh}, doneCh, &urlMap)
+	go Crawl(args.url, args.depth, realFetcher{client: args.client, graphCh: graphCh}, doneCh, &urlMap)
 	// Loop until crawling is done, publishing results to redis
 	for {
 		select {
 		case <-doneCh:
 			marshalled, _ := json.Marshal(finishSentinel{DoneMessage: "true"})
-			rdb.LPush(ctx, resultsListName, marshalled) //.Publish(ctx, resultsChannelName, marshalled).Err()
-			rdb.Expire(ctx, resultsListName, crawlResultsTTL*time.Second)
-			fmt.Println("Done recursively crawling: ", url)
+			args.rdb.LPush(ctx, resultsListName, marshalled) //.Publish(ctx, resultsChannelName, marshalled).Err()
+			args.rdb.Expire(ctx, resultsListName, crawlResultsTTL*time.Second)
+			fmt.Println("Done recursively crawling: ", args.url)
 			return
 		case newNode := <-graphCh:
 			marshalled, _ := json.Marshal(&newNode)
-			rdb.LPush(ctx, resultsListName, marshalled) //.Publish(ctx, resultsChannelName, marshalled).Err()
+			args.rdb.LPush(ctx, resultsListName, marshalled) //.Publish(ctx, resultsChannelName, marshalled).Err()
 			fmt.Println(string(marshalled))
 
 		}
@@ -168,16 +176,12 @@ func main() {
 		splitCommand := strings.Split(msg.Payload, ",")
 		fmt.Println("Staring recursive crawl on url: ", splitCommand[0])
 		fmt.Println("Unique ID: ", splitCommand[1])
-		go crawlHelper(splitCommand[0], splitCommand[1], 3, client, rdb)
+		go crawlHelper(helperOptions{url: splitCommand[0], uniqueID: splitCommand[1], depth: 3, client: client, rdb: rdb})
 	}
 
 }
 
 // realFetcher is real Fetcher that returns real results.
-type realFetcher struct {
-	client  *http.Client
-	graphCh chan graphNode
-}
 
 func (f realFetcher) Fetch(url string) (string, []string, error) {
 	results := make([]string, 0, initialResultsSize)
