@@ -130,14 +130,14 @@ func crawlHelper(args helperOptions) {
 		select {
 		case <-doneCh:
 			marshalled, _ := json.Marshal(finishSentinel{DoneMessage: "true"})
-			args.rdb.LPush(ctx, resultsListName, marshalled)
+			args.rdb.RPush(ctx, resultsListName, marshalled)
 			// TTL will be set after crawl completes
 			args.rdb.Expire(ctx, resultsListName, crawlResultsTTL*time.Second)
 			fmt.Println("Done recursively crawling: ", args.url)
 			return
 		case newNode := <-graphCh:
 			marshalled, _ := json.Marshal(&newNode)
-			args.rdb.LPush(ctx, resultsListName, marshalled)
+			args.rdb.RPush(ctx, resultsListName, marshalled)
 
 			fmt.Println(string(marshalled))
 
