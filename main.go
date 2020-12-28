@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	initialResultsSize = 50
-	timeOutInSeconds   = 2
-	crawlResultsTTL    = 60
+	maxLinksScraped  = 7
+	timeOutInSeconds = 2
+	crawlResultsTTL  = 60
 )
 
 type (
@@ -184,8 +184,8 @@ func main() {
 // realFetcher is real Fetcher that returns real results.
 
 func (f realFetcher) Fetch(url string) (string, []string, error) {
-	results := make([]string, 0, initialResultsSize)
-
+	results := make([]string, 0, maxLinksScraped)
+	linksScraped := 0
 	resp, err := f.client.Get(url)
 	if err != nil {
 		fmt.Println(err)
@@ -208,6 +208,11 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 						if string(key) == "href" {
 							if isHTTP, _ := regexp.Match(`https?://.*`, val); isHTTP {
 								results = append(results, string(val))
+								linksScraped++
+								if linksScraped >= maxLinksScraped {
+									return "", results, nil
+								}
+
 							}
 							break
 						}
