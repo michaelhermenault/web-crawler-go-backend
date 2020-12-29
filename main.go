@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	maxLinksScraped  = 10
-	timeOutInSeconds = 2
-	crawlResultsTTL  = 60
-	crawlDepth       = 5
+	maxLinksScraped          = 5
+	timeOutInSeconds         = 2
+	crawlResultsTTL          = 60
+	crawlDepth               = 7
+	sleepAfterCrawlInSeconds = 2
 )
 
 type (
@@ -88,7 +89,7 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, results
 		fmt.Println(err)
 		return
 	}
-
+	time.Sleep(time.Second * sleepAfterCrawlInSeconds)
 	resultsChan <- graphNode{Parent: url, Children: urls, TimeFound: time.Since(startTime), Depth: depth}
 
 	// fmt.Printf("Crawling: %s %q, child length: %d\n", url, body, len(urls))
