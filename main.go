@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	maxLinksScraped         = 5
+	maxLinksScraped         = 7
 	timeOutInSeconds        = 2
 	crawlResultsTTL         = 60
 	crawlDepth              = 7
@@ -219,8 +219,10 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 					if string(key) == "href" {
 						if isHTTP, _ := regexp.Match(`https?://.*`, val); isHTTP {
 							// We shouldn't add the url to the results if it's on the same domain
-							parsedChildURL, _ := url.Parse(string(val))
-							if domain != parsedChildURL.Host {
+							parsedChildURL, err := url.Parse(string(val))
+							// Check if the url was valid (html document could always be bad)
+							// Then check that the domain is different from our parent
+							if err == nil && domain != parsedChildURL.Host {
 								results = append(results, string(val))
 								linksScraped++
 								if linksScraped >= maxLinksScraped {
