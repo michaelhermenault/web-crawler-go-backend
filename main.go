@@ -16,11 +16,11 @@ import (
 )
 
 const (
-	maxLinksScraped          = 5
-	timeOutInSeconds         = 2
-	crawlResultsTTL          = 60
-	crawlDepth               = 7
-	sleepAfterCrawlInSeconds = 2
+	maxLinksScraped         = 5
+	timeOutInSeconds        = 2
+	crawlResultsTTL         = 60
+	crawlDepth              = 7
+	maxConcurrencyPerWorker = 5
 )
 
 type (
@@ -45,8 +45,8 @@ type (
 		DoneMessage string
 	}
 	realFetcher struct {
-		client  *http.Client
-		graphCh chan graphNode
+		client *http.Client
+		guard  chan struct{}
 	}
 	helperOptions struct {
 		url, uniqueID string
@@ -89,7 +89,6 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, results
 		fmt.Println(err)
 		return
 	}
-	time.Sleep(time.Second * sleepAfterCrawlInSeconds)
 	resultsChan <- graphNode{Parent: url, Children: urls, TimeFound: time.Since(startTime), Depth: depth}
 
 	// fmt.Printf("Crawling: %s %q, child length: %d\n", url, body, len(urls))
@@ -98,6 +97,7 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, results
 	numToExplore := len(urls)
 
 	for _, u := range urls {
+
 		go Crawl(u, depth-1, fetcher, doneCh, resultsChan, startTime, urlMap)
 	}
 
@@ -121,6 +121,7 @@ func crawlHelper(args helperOptions) {
 
 	doneCh := make(chan bool)
 	graphCh := make(chan graphNode)
+	guard := make(chan struct{}, maxConcurrencyPerWorker)
 
 	defer func() {
 		close(doneCh)
@@ -128,7 +129,7 @@ func crawlHelper(args helperOptions) {
 	}()
 
 	urlMap := SafeMap{v: make(map[string]bool)}
-	go Crawl(args.url, args.depth, realFetcher{client: args.client, graphCh: graphCh}, doneCh, graphCh, time.Now(), &urlMap)
+	go Crawl(args.url, args.depth, realFetcher{client: args.client, guard: guard}, doneCh, graphCh, time.Now(), &urlMap)
 	// Loop until crawling is done, publishing results to redis
 	for {
 		select {
@@ -186,8 +187,11 @@ func main() {
 }
 
 // realFetcher is real Fetcher that returns real results.
-
 func (f realFetcher) Fetch(url string) (string, []string, error) {
+	f.guard <- struct{}{}
+	defer func() {
+		<-f.guard
+	}()
 	results := make([]string, 0, maxLinksScraped)
 	linksScraped := 0
 	resp, err := f.client.Get(url)
