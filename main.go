@@ -19,6 +19,7 @@ const (
 	maxLinksScraped  = 7
 	timeOutInSeconds = 2
 	crawlResultsTTL  = 60
+	crawlDepth       = 4
 )
 
 type (
@@ -37,14 +38,14 @@ type (
 		Parent    string
 		Children  []string
 		TimeFound time.Duration
+		Depth     int
 	}
 	finishSentinel struct {
 		DoneMessage string
 	}
 	realFetcher struct {
-		client    *http.Client
-		graphCh   chan graphNode
-		startTime time.Time
+		client  *http.Client
+		graphCh chan graphNode
 	}
 	helperOptions struct {
 		url, uniqueID string
@@ -66,7 +67,7 @@ func (safeMap *SafeMap) flip(name string) bool {
 
 // Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
-func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap *SafeMap) {
+func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, resultsChan chan graphNode, startTime time.Time, urlMap *SafeMap) {
 	// Once we're done we inform our parent
 	defer func() {
 		parentChan <- true
@@ -82,6 +83,8 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 	}
 	_, urls, err := fetcher.Fetch(url)
 
+	resultsChan <- graphNode{Parent: url, Children: urls, TimeFound: time.Since(startTime), Depth: depth}
+
 	if err != nil {
 		// If we can't find the url, return (future iterations)
 		fmt.Println(err)
@@ -94,7 +97,7 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, urlMap 
 	numToExplore := len(urls)
 
 	for _, u := range urls {
-		go Crawl(u, depth-1, fetcher, doneCh, urlMap)
+		go Crawl(u, depth-1, fetcher, doneCh, resultsChan, startTime, urlMap)
 	}
 
 	numFin := 0
@@ -124,7 +127,7 @@ func crawlHelper(args helperOptions) {
 	}()
 
 	urlMap := SafeMap{v: make(map[string]bool)}
-	go Crawl(args.url, args.depth, realFetcher{client: args.client, graphCh: graphCh, startTime: time.Now()}, doneCh, &urlMap)
+	go Crawl(args.url, args.depth, realFetcher{client: args.client, graphCh: graphCh}, doneCh, graphCh, time.Now(), &urlMap)
 	// Loop until crawling is done, publishing results to redis
 	for {
 		select {
@@ -176,7 +179,7 @@ func main() {
 		splitCommand := strings.Split(msg.Payload, ",")
 		fmt.Println("Staring recursive crawl on url: ", splitCommand[0])
 		fmt.Println("Unique ID: ", splitCommand[1])
-		go crawlHelper(helperOptions{url: splitCommand[0], uniqueID: splitCommand[1], depth: 3, client: client, rdb: rdb})
+		go crawlHelper(helperOptions{url: splitCommand[0], uniqueID: splitCommand[1], depth: crawlDepth, client: client, rdb: rdb})
 	}
 
 }
@@ -198,31 +201,29 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 		tt := z.Next()
 		switch tt {
 		case html.ErrorToken:
-			f.graphCh <- graphNode{Parent: url, Children: results, TimeFound: time.Since(f.startTime)}
 			return "", results, nil
 		case html.StartTagToken, html.EndTagToken:
 			tn, _ := z.TagName()
-			if len(tn) == 1 && tn[0] == 'a' {
-				if tt == html.StartTagToken {
-					for key, val, moreAttrs := z.TagAttr(); ; _, val, moreAttrs = z.TagAttr() {
-						if string(key) == "href" {
-							if isHTTP, _ := regexp.Match(`https?://.*`, val); isHTTP {
-								results = append(results, string(val))
-								linksScraped++
-								if linksScraped >= maxLinksScraped {
-									return "", results, nil
-								}
-
+			if len(tn) == 1 && tn[0] == 'a' && tt == html.StartTagToken {
+				// Scan anchor tag for href attribute
+				for key, val, moreAttrs := z.TagAttr(); ; _, val, moreAttrs = z.TagAttr() {
+					if string(key) == "href" {
+						if isHTTP, _ := regexp.Match(`https?://.*`, val); isHTTP {
+							results = append(results, string(val))
+							linksScraped++
+							if linksScraped >= maxLinksScraped {
+								return "", results, nil
 							}
-							break
-						}
-						if !moreAttrs {
-							break
-						}
 
+						}
+						break
+					}
+					if !moreAttrs {
+						break
 					}
 
 				}
+
 			}
 		}
 	}
