@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,7 +21,7 @@ const (
 	timeOutInSeconds        = 2
 	crawlResultsTTL         = 60
 	crawlDepth              = 7
-	maxConcurrencyPerWorker = 5
+	maxConcurrencyPerWorker = 3
 )
 
 type (
@@ -187,14 +188,17 @@ func main() {
 }
 
 // realFetcher is real Fetcher that returns real results.
-func (f realFetcher) Fetch(url string) (string, []string, error) {
+func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 	f.guard <- struct{}{}
 	defer func() {
 		<-f.guard
 	}()
+	parsedURL, _ := url.Parse(urlToFetch)
+	domain := parsedURL.Host
+
 	results := make([]string, 0, maxLinksScraped)
 	linksScraped := 0
-	resp, err := f.client.Get(url)
+	resp, err := f.client.Get(urlToFetch)
 	if err != nil {
 		fmt.Println(err)
 		return "", nil, err
@@ -214,13 +218,19 @@ func (f realFetcher) Fetch(url string) (string, []string, error) {
 				for key, val, moreAttrs := z.TagAttr(); ; _, val, moreAttrs = z.TagAttr() {
 					if string(key) == "href" {
 						if isHTTP, _ := regexp.Match(`https?://.*`, val); isHTTP {
-							results = append(results, string(val))
-							linksScraped++
-							if linksScraped >= maxLinksScraped {
-								return "", results, nil
+							// We shouldn't add the url to the results if it's on the same domain
+							parsedChildURL, _ := url.Parse(string(val))
+							if domain != parsedChildURL.Host {
+								results = append(results, string(val))
+								linksScraped++
+								if linksScraped >= maxLinksScraped {
+									return "", results, nil
+								}
+
 							}
 
 						}
+						// Stop reading attributes once we get to the href attribute
 						break
 					}
 					if !moreAttrs {
