@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -193,9 +194,9 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 	defer func() {
 		<-f.guard
 	}()
-	parsedURL, _ := url.Parse(urlToFetch)
-	domain := parsedURL.Host
 
+	domain, _ := getDomainFromURL(urlToFetch)
+	fmt.Println(domain)
 	results := make([]string, 0, maxLinksScraped)
 	linksScraped := 0
 	resp, err := f.client.Get(urlToFetch)
@@ -219,10 +220,11 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 					if string(key) == "href" {
 						if isHTTP, _ := regexp.Match(`https?://.*`, val); isHTTP {
 							// We shouldn't add the url to the results if it's on the same domain
-							parsedChildURL, err := url.Parse(string(val))
+							childDomain, err := getDomainFromURL(string(val))
+
 							// Check if the url was valid (html document could always be bad)
 							// Then check that the domain is different from our parent
-							if err == nil && domain != parsedChildURL.Host {
+							if err == nil && domain != childDomain {
 								results = append(results, string(val))
 								linksScraped++
 								if linksScraped >= maxLinksScraped {
@@ -245,4 +247,17 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 		}
 	}
 
+}
+
+func getDomainFromURL(urlToParse string) (string, error) {
+	parsedURL, err := url.Parse(urlToParse)
+	if err != nil {
+		return "", err
+	}
+	splitDomain := strings.Split(parsedURL.Host, ".")
+	if len(splitDomain) < 2 {
+		return "", errors.New("invalid url")
+	}
+	fmt.Println(splitDomain)
+	return splitDomain[len(splitDomain)-2], nil
 }
