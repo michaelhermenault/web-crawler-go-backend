@@ -196,7 +196,6 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 	}()
 
 	domain, _ := getDomainFromURL(urlToFetch)
-	fmt.Println(domain)
 	results := make([]string, 0, maxLinksScraped)
 	linksScraped := 0
 	resp, err := f.client.Get(urlToFetch)
@@ -258,6 +257,5 @@ func getDomainFromURL(urlToParse string) (string, error) {
 	if len(splitDomain) < 2 {
 		return "", errors.New("invalid url")
 	}
-	fmt.Println(splitDomain)
 	return splitDomain[len(splitDomain)-2], nil
 }
