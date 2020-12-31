@@ -70,10 +70,10 @@ func (safeMap *SafeMap) flip(name string) bool {
 
 // Crawl uses fetcher to recursively crawl
 // pages starting with url, to a maximum of depth.
-func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, resultsChan chan graphNode, startTime time.Time, urlMap *SafeMap) {
+func Crawl(url string, depth int, fetcher Fetcher, parentChan chan struct{}, resultsChan chan graphNode, startTime time.Time, urlMap *SafeMap) {
 	// Once we're done we inform our parent
 	defer func() {
-		parentChan <- true
+		parentChan <- struct{}{}
 	}()
 
 	if depth <= 0 {
@@ -95,7 +95,8 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, results
 
 	// fmt.Printf("Crawling: %s %q, child length: %d\n", url, body, len(urls))
 
-	doneCh := make(chan bool, len(urls))
+	doneCh := make(chan struct{}, len(urls))
+
 	numToExplore := len(urls)
 
 	for _, u := range urls {
@@ -112,6 +113,7 @@ func Crawl(url string, depth int, fetcher Fetcher, parentChan chan bool, results
 		numFin++
 
 	}
+	close(doneCh)
 	return
 }
 
@@ -121,13 +123,14 @@ func crawlHelper(args helperOptions) {
 	// In case thread crashes, set ttl beforehand (no memory leaks)
 	args.rdb.Expire(ctx, resultsListName, crawlResultsTTL*time.Second)
 
-	doneCh := make(chan bool)
+	doneCh := make(chan struct{})
 	graphCh := make(chan graphNode)
 	guard := make(chan struct{}, maxConcurrencyPerWorker)
 
 	defer func() {
 		close(doneCh)
 		close(graphCh)
+		close(guard)
 	}()
 
 	urlMap := SafeMap{v: make(map[string]bool)}
