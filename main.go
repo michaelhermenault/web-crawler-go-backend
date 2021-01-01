@@ -202,10 +202,15 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 	results := make([]string, 0, maxLinksScraped)
 	linksScraped := 0
 	resp, err := f.client.Get(urlToFetch)
+
 	if err != nil {
 		fmt.Println(err)
 		return "", nil, err
 	}
+
+	defer func() {
+		resp.Body.Close()
+	}()
 
 	z := html.NewTokenizer(resp.Body)
 
