@@ -216,17 +216,20 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 
 	for {
 		tt := z.Next()
+
 		switch tt {
 		case html.ErrorToken:
 			return "", results, nil
-		case html.StartTagToken, html.EndTagToken:
+		case html.StartTagToken:
+
 			tn, _ := z.TagName()
-			if len(tn) == 1 && tn[0] == 'a' && tt == html.StartTagToken {
+			if len(tn) == 1 && tn[0] == 'a' {
 				// Scan anchor tag for href attribute
-				for key, val, moreAttrs := z.TagAttr(); ; _, val, moreAttrs = z.TagAttr() {
+				key, val, moreAttrs := z.TagAttr()
+				for {
+
 					if string(key) == "href" {
 						if isHTTP, _ := regexp.Match(`https?://.*`, val); isHTTP {
-							// We shouldn't add the url to the results if it's on the same domain
 							childDomain, err := getDomainFromURL(string(val))
 
 							// Check if the url was valid (html document could always be bad)
@@ -247,9 +250,9 @@ func (f realFetcher) Fetch(urlToFetch string) (string, []string, error) {
 					if !moreAttrs {
 						break
 					}
+					key, val, moreAttrs = z.TagAttr()
 
 				}
-
 			}
 		}
 	}
